@@ -1,64 +1,11 @@
-const zc = ((Nums) => {
-	const numsReversed = Object.keys(Nums).map(x => +x).filter(x => x > 0)
-	const getMinDiv = (num) => {
-		for (let i = numsReversed.length; i >= 0; i--)
-			if (num >= numsReversed[i])
-				return numsReversed[i]
-	}
-	const isDotRegex = /\.(\d+?)0{0,}$/
-	const demolish = (num) => {
-		if (typeof num !== "number")
-			return ""
+// 重构版本：325.js — 325 论证器
+// 任意整数 → 只含 "325"（3/2/5、32/5、3/25 切分）与 + - * / ( ) 的表达式
+// Node:  const zc = require('./zc');  zc(1919810)
+// 页面:  <script src="zc.js"></script> 后直接调用 zc(1919810)
 
-		if (num === Infinity || Number.isNaN(num))
-			return `这么言周的${num}有必要论证吗`
-
-		if (num < 0)
-			return `(⑬)*(${demolish(num * -1)})`.replace(/\*\(1\)/g, "")
-
-		if (!Number.isInteger(num)) {
-			// abs(num) is definitely smaller than 2**51
-			// rescale
-			const n = num.toFixed(16).match(isDotRegex)[1].length
-			return `(${demolish(num * Math.pow(10, n))})/((5*2))^(${demolish(n)})`
-		}
-
-		if (Nums[num])
-			return String(num)
-
-		const div = getMinDiv(num)
-		return (`${div}*(${demolish(Math.floor(num / div))})+` +
-			`(${demolish(num % div)})`).replace(/\*\(1\)|\+\(0\)$/g, "")
-	}
-	//Finisher
-	const finisher = (expr) => {
-		expr = expr.replace(/\d+|⑬/g, (n) => Nums[n] !== undefined ? Nums[n] : demolish(+n))
-		expr = expr.replace("^", "**")
-		//As long as it matches ([\*|\/])\(([^\+\-\(\)]+)\), replace it with $1$2
-		while (expr.match(/[\*|\/]\([^\+\-\(\)]+\)/))
-			expr = expr.replace(/([\*|\/])\(([^\+\-\(\)]+)\)/, (m, $1, $2) => $1 + $2)
-		//As long as it matches ([\+|\-])\(([^\(\)]+)\)([\+|\-|\)]), replace it with $1$2$3
-		while (expr.match(/[\+|\-]\([^\(\)]+\)[\+|\-|\)]/))
-			expr = expr.replace(/([\+|\-])\(([^\(\)]+)\)([\+|\-|\)])/, (m, $1, $2, $3) => $1 + $2 + $3)
-		//As long as it matches ([\+|\-])\(([^\(\)]+)\)$, replace it with $1$2
-		while (expr.match(/[\+|\-]\(([^\(\)]+)\)$/))
-			expr = expr.replace(/([\+|\-])\(([^\(\)]+)\)$/, (m, $1, $2) => $1 + $2)
-		//If there is a bracket in the outermost part, remove it
-		if (expr.match(/^\([^\(\)]+?\)$/))
-			expr = expr.replace(/^\(([^\(\)]+)\)$/, "$1")
-
-		//Collapse redundant double brackets
-		while (expr.match(/\(\(([^()]+)\)\)/))
-			expr = expr.replace(/\(\(([^()]+)\)\)/g, '($1)')
-		expr = expr.replace(/\+-/g,'-')
-		return expr
-	}
-	return (num) => finisher(demolish(num))
-})({
+const UNITS = {
 	0: '(3+2-5)',
 	1: '(3*2-5)',
-	2: '(3*2-5+3*2-5)',
-	3: '(3+2+5)+(3-2*5)',
 	5: '((3-2)*5)',
 	6: '(3-2+5)',
 	10: '(3+2+5)',
@@ -69,7 +16,6 @@ const zc = ((Nums) => {
 	27: '(32-5)',
 	28: '(3+25)',
 	30: '(3*2*5)',
-	32: '((3+25)-(3-2-5))',
 	37: '(32+5)',
 	75: '(3*25)',
 	160: '(32*5)',
@@ -79,7 +25,58 @@ const zc = ((Nums) => {
 	'-7': '(3-2*5)',
 	'-9': '(3*(2-5))',
 	'-22': '(3-25)',
-})
+};
 
-if (typeof module === 'object' && module.exports)
-	module.exports = zc
+// 对象键是字符串，先转成 [值, 表达式] 列表，避免遍历时反复转换
+const UNITS_LIST = Object.entries(UNITS).map(([k, e]) => [Number(k), e]);
+
+// 预计算：单单元 + 双单元组合能表达的所有整数（含负值），同值留最短写法
+const known = new Map();
+const put = (v, e) => {
+	if (!Number.isInteger(v)) return;
+	const old = known.get(v);
+	if (old === undefined || old.length > e.length) known.set(v, e);
+};
+for (const [v, e] of UNITS_LIST) put(v, e);
+for (const [v1, e1] of UNITS_LIST)
+	for (const [v2, e2] of UNITS_LIST) {
+		put(v1 + v2, `(${e1}+${e2})`);
+		put(v1 - v2, `(${e1}-${e2})`);
+		put(v1 * v2, `(${e1}*${e2})`);
+		if (v2 !== 0 && v1 % v2 === 0) put(v1 / v2, `(${e1}/${e2})`);
+	}
+
+const memo = new Map();
+
+// 主函数：任意整数 → 只含 325 的表达式
+function zc(n) {
+	n = Math.trunc(n);
+	if (!Number.isFinite(n)) throw new TypeError('zc(n): n 需要是有限数字');
+	if (known.has(n)) return known.get(n);   // 小数字（含 -1、-4 等负值）直接命中
+	if (memo.has(n)) return memo.get(n);
+
+	let res;
+	if (n < 0) {
+		res = `((3+2-5)-(${zc(-n)}))`;       // 负数兜底：0 - |n|
+	} else {
+		// 大数：n = 单元值 × 商 + 余，每种切法都试，取最短表达式
+		let best = '';
+		for (const [v, e] of UNITS_LIST) {
+			if (v <= 1) continue;
+			const q = Math.floor(n / v), r = n % v;
+			if (q < 1) continue;
+			const cand =
+				r === 0 ? `(${e}*${zc(q)})` :
+				q === 1 ? `(${e}+${zc(r)})` :
+				`((${e}*${zc(q)}+${zc(r)}))`;
+			if (!best || cand.length < best.length) best = cand;
+		}
+		res = best;
+	}
+	memo.set(n, res);
+	return res;
+}
+
+// 双导出：CommonJS（Node / 打包器）+ 浏览器全局
+if (typeof module !== 'undefined' && module.exports) module.exports = zc;
+if (typeof window !== 'undefined') window.zc = zc;
